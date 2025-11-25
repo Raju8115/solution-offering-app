@@ -39,20 +39,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ----------------------------------------------------------------------
-# 2️⃣ SESSION MIDDLEWARE (AFTER CORS)
-#    Render free tier → must disable https_only
-# ----------------------------------------------------------------------
+# 2️⃣ SESSION AFTER CORS
 app.add_middleware(
     SessionMiddleware,
-    secret_key=settings.SESSION_SECRET,   # Must be fixed value in .env
+    secret_key=settings.SESSION_SECRET,
     session_cookie="session",
     same_site="none",
-    secure=True,                          # OK for Render
-    https_only=False,                     # MUST be False for Render free tier
-    max_age=86400,                        # 1 day
+    max_age=86400,
+    https_only=True,
 )
-
 # ----------------------------------------------------------------------
 # 3️⃣ OAuth config
 # ----------------------------------------------------------------------
