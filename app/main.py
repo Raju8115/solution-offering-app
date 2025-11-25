@@ -27,26 +27,28 @@ app = FastAPI(
 # ----------------------------------------------------------------------
 # 1️⃣ CORS FIRST (must be before session middleware)
 # ----------------------------------------------------------------------
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://solution-offering-app.onrender.com",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "https://solution-offering-app.onrender.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 2️⃣ SESSION AFTER CORS
 app.add_middleware(
     SessionMiddleware,
     secret_key=settings.SESSION_SECRET,
     session_cookie="session",
-    same_site="lax",
+    same_site="none",
     max_age=86400,
 )
+
 # ----------------------------------------------------------------------
 # 3️⃣ OAuth config
 # ----------------------------------------------------------------------
