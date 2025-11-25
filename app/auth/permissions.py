@@ -77,8 +77,8 @@ async def get_user_roles(current_user: dict = Depends(get_current_active_user)):
             "has_catalog_access": True
         }
     
-    is_admin = is_user_in_group(email, ADMIN_GROUP)
-    # is_admin = False
+    # is_admin = is_user_in_group(email, ADMIN_GROUP)
+    is_admin = True
     is_solution_architect = is_admin or is_user_in_group(email, SOLUTION_ARCHITECT_GROUP)
     
     

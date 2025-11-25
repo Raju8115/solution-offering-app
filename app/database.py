@@ -19,7 +19,7 @@ engine = create_engine(
     DATABASE_URL,
     connect_args={
         "sslmode": "verify-full",
-        "sslrootcert": "/Users/rajua/Documents/Pre-Prod/Backend/fb0d9c78-2df6-4ccc-8e70-a637bf2154fb"
+        "sslrootcert": "/etc/secrets/root.crt"
     },
     echo=False
 )

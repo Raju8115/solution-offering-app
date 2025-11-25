@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     
     # Frontend
     FRONTEND_URL: str = "http://localhost:3000"
+
+    BACKEND_URL: str = "http://localhost:8000/api/v1"
     
     # Session
     SESSION_SECRET: str
