@@ -47,28 +47,27 @@ async def auth_callback(request: Request):
 
         from app.main import oauth
 
-        # 1️⃣ Exchange authorization code for tokens
         token = await oauth.appid.authorize_access_token(request)
         logger.info("[CALLBACK] Token exchange OK")
 
-        # 2️⃣ Get user claims
         try:
             user = await oauth.appid.parse_id_token(request, token)
         except:
-            logger.warning("[CALLBACK] Failed to parse ID token, using userinfo()")
+            logger.warning("[CALLBACK] ID token parse failed, using userinfo")
             user = await oauth.appid.userinfo(token=token)
 
         email = user.get("email")
         name = user.get("name") or f"{user.get('given_name', '')} {user.get('family_name', '')}".strip()
 
-        # ==========================================================
-        # 3️⃣ ASSIGN EVERY USER AS ADMIN (your requirement)
-        # ==========================================================
+        # FIX 1 — Remove AppID OAuth state garbage
+        for key in list(request.session.keys()):
+            if key.startswith("_state_appid"):
+                del request.session[key]
+
+        # EVERY USER IS ADMIN
         roles = ["admin"]
 
-        # ==========================================================
-        # 4️⃣ SAVE EXACT SESSION STRUCTURE REACT EXPECTS
-        # ==========================================================
+        # Save user
         request.session["user"] = {
             "sub": user.get("sub"),
             "name": name,
@@ -76,26 +75,29 @@ async def auth_callback(request: Request):
             "given_name": user.get("given_name"),
             "family_name": user.get("family_name"),
             "identities": user.get("identities"),
-            "roles": roles,                   # important
+            "roles": roles,
         }
 
         request.session["token"] = {
             "access_token": token.get("access_token"),
             "token_type": token.get("token_type"),
             "expires_at": token.get("expires_at"),
-            "id_token": token.get("id_token"),  # important for React
+            "id_token": token.get("id_token"),
         }
 
-        request.session.update(request.session)  # Force save
+        request.session.update(request.session)   # 🔥 FIX 2 — Force save
 
         logger.info(f"[CALLBACK] Session saved for {email}")
 
-        # 5️⃣ Redirect to frontend
-        return RedirectResponse(url=f"{settings.FRONTEND_URL}/catalog", status_code=302)
+        # FIX 3 — Redirect with cookie included
+        response = RedirectResponse(f"{settings.FRONTEND_URL}/catalog")
+
+        return response
 
     except Exception as e:
         logger.error(f"[CALLBACK ERROR] {e}", exc_info=True)
-        return RedirectResponse(url=f"{settings.FRONTEND_URL}/login?error=auth_failed")
+        return RedirectResponse(f"{settings.FRONTEND_URL}/login?error=auth_failed")
+
 
 @router.get("/me")
 async def get_current_user_info(
