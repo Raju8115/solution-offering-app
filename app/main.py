@@ -8,6 +8,7 @@ import logging
 import os
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.proxy_headers import ProxyHeadersMiddleware
 
 # Logging
 logging.basicConfig(
