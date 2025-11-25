@@ -82,8 +82,16 @@ async def startup_event():
     logger.info("=" * 70)
     logger.info("Solution Offering App - Starting")
     logger.info(f"Frontend URL: {settings.FRONTEND_URL}")
-    logger.info(f"CORS Allowed Origins: {', '.join(app.cors_origins or [])}")
+
+    ALLOWED_ORIGINS = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://solution-offering-app.onrender.com",
+    ]
+
+    logger.info(f"CORS Allowed Origins: {ALLOWED_ORIGINS}")
     logger.info("=" * 70)
+
 
 @app.get("/")
 async def index():
