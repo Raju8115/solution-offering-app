@@ -12,19 +12,17 @@ import logging
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-
 # ==========================================================
 #  LOGIN (start OAuth2 flow)
 # ==========================================================
 @router.get("/login")
 async def login(request: Request):
     """
-    Start IBM AppID login flow.
-    Always clears old session to avoid STATE MISMATCH errors.
+    Start OAuth2 login.
+    Clear stale session to avoid 'state mismatch'.
     """
     try:
-        # Clear stale session to prevent CSRF/state mismatch
-        request.session.clear()
+        request.session.clear()  # IMPORTANT
 
         redirect_uri = str(request.url_for("auth_callback"))
         logger.info(f"[LOGIN] redirect_uri = {redirect_uri}")
@@ -34,47 +32,54 @@ async def login(request: Request):
 
     except Exception as e:
         logger.error(f"[LOGIN ERROR] {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Login failed")
+        raise HTTPException(500, "Login failed")
 
 
 # ==========================================================
-#  CALLBACK (App ID calls this after login)
+#  CALLBACK (after successful login)
 # ==========================================================
 @router.get("/auth/callback")
 async def auth_callback(request: Request):
     try:
-        logger.info("[CALLBACK] Processing auth callback...")
+        logger.info("[CALLBACK] Processing...")
 
         from app.main import oauth
 
         token = await oauth.appid.authorize_access_token(request)
-        logger.info("[CALLBACK] Token exchange OK")
+        logger.info("[CALLBACK] Token OK")
 
+        # Fetch user
         try:
-            user = await oauth.appid.parse_id_token(request, token)
+            userinfo = await oauth.appid.parse_id_token(request, token)
         except:
-            logger.warning("[CALLBACK] ID token parse failed, using userinfo")
-            user = await oauth.appid.userinfo(token=token)
+            logger.warning("[CALLBACK] ID token parse failed → using userinfo()")
+            userinfo = await oauth.appid.userinfo(token=token)
 
-        email = user.get("email")
-        name = user.get("name") or f"{user.get('given_name', '')} {user.get('family_name', '')}".strip()
+        email = userinfo.get("email")
+        name = userinfo.get("name") or f"{userinfo.get('given_name','')} {userinfo.get('family_name','')}".strip()
 
-        # FIX 1 — Remove AppID OAuth state garbage
+        # ===================================================
+        # REMOVE AppID internal state keys (MUST DO)
+        # ===================================================
         for key in list(request.session.keys()):
             if key.startswith("_state_appid"):
                 del request.session[key]
 
-        # EVERY USER IS ADMIN
+        # ===================================================
+        # FORCE USER AS ADMIN
+        # ===================================================
         roles = ["admin"]
 
-        # Save user
+        # ===================================================
+        # SAVE SESSION (100% stable format)
+        # ===================================================
         request.session["user"] = {
-            "sub": user.get("sub"),
-            "name": name,
+            "sub": userinfo.get("sub"),
             "email": email,
-            "given_name": user.get("given_name"),
-            "family_name": user.get("family_name"),
-            "identities": user.get("identities"),
+            "name": name,
+            "given_name": userinfo.get("given_name"),
+            "family_name": userinfo.get("family_name"),
+            "identities": userinfo.get("identities"),
             "roles": roles,
         }
 
@@ -85,19 +90,40 @@ async def auth_callback(request: Request):
             "id_token": token.get("id_token"),
         }
 
-        request.session.update(request.session)   # 🔥 FIX 2 — Force save
+        request.session.update(request.session)  # FORCE SAVE
 
         logger.info(f"[CALLBACK] Session saved for {email}")
+        logger.info(f"[CALLBACK] Redirect -> {settings.FRONTEND_URL}/catalog")
 
-        # FIX 3 — Redirect with cookie included
-        response = RedirectResponse(f"{settings.FRONTEND_URL}/catalog")
-
-        return response
+        return RedirectResponse(f"{settings.FRONTEND_URL}/catalog")
 
     except Exception as e:
         logger.error(f"[CALLBACK ERROR] {e}", exc_info=True)
         return RedirectResponse(f"{settings.FRONTEND_URL}/login?error=auth_failed")
 
+
+# ==========================================================
+#  CHECK AUTH (called by React)
+# ==========================================================
+@router.get("/check")
+async def check_auth(request: Request):
+    """
+    React uses this to verify authentication on page load.
+    """
+    user = request.session.get("user")
+
+    session_id = request.cookies.get("session", "no_cookie")
+
+    logger.info("=== AUTH CHECK ===")
+    logger.info(f"Cookie: {session_id[:20]}...")
+    logger.info(f"Session keys: {list(request.session.keys())}")
+    logger.info(f"User exists: {bool(user)}")
+    logger.info("==================")
+
+    if user:
+        return {"authenticated": True, "user": user}
+
+    return {"authenticated": False}
 
 @router.get("/me")
 async def get_current_user_info(
@@ -112,24 +138,6 @@ async def get_current_user_info(
         "roles": roles
     }
 
-# ==========================================================
-#  CHECK AUTH STATUS (React uses this)
-# ==========================================================
-@router.get("/check")
-async def check_auth(request: Request):
-    session_cookie = request.cookies.get("session", "NO_COOKIE")
-    user = request.session.get("user")
-
-    logger.info("=== AUTH CHECK ===")
-    logger.info(f"Cookie: {session_cookie[:20]}...")
-    logger.info(f"Session: {dict(request.session)}")
-    logger.info(f"User exists: {user is not None}")
-    logger.info("===================")
-
-    if user:
-        return {"authenticated": True, "user": user}
-
-    return {"authenticated": False}
 
 
 # ==========================================================
@@ -137,39 +145,31 @@ async def check_auth(request: Request):
 # ==========================================================
 @router.post("/logout")
 async def logout(request: Request):
-    """
-    Clear session + remove cookie + return W3 logout URL.
-    """
-    W3_LOGOUT = "https://preprod.login.w3.ibm.com/idaas/mtfim/sps/idaas/logout"
-
     try:
-        # Clear server-side session
         request.session.clear()
 
-        response = JSONResponse(
-            content={
-                "message": "Logged out",
-                "logout_url": W3_LOGOUT
-            }
+        W3_LOGOUT = "https://preprod.login.w3.ibm.com/idaas/mtfim/sps/idaas/logout"
+
+        resp = JSONResponse(
+            {"message": "Logged out", "logout_url": W3_LOGOUT}
         )
 
-        # Delete cookie
-        response.set_cookie(
-            key="session",
+        resp.set_cookie(
+            "session",
             value="",
-            httponly=True,
             secure=True,
+            httponly=True,
             samesite="none",
-            max_age=0,
             expires=0,
+            max_age=0,
         )
 
-        logger.info("[LOGOUT] session cleared")
-        return response
+        logger.info("[LOGOUT] Session cleared")
+        return resp
 
     except Exception as e:
         logger.error(f"[LOGOUT ERROR] {e}", exc_info=True)
-        return JSONResponse(status_code=500, content={"error": "Logout failed"})
+        return JSONResponse({"error": "Logout failed"}, status_code=500)
 
 
 # ==========================================================
@@ -188,35 +188,6 @@ async def validate_session(request: Request):
             "name": user.get("name"),
         }
     }
-
-@router.get("/check")
-async def check_auth(request: Request):
-    """Check authentication status without requiring login"""
-    
-    session_id = request.cookies.get('session', 'NO_COOKIE')
-    user = request.session.get('user')
-    
-    logger.info(f"=== AUTH CHECK ===")
-    logger.info(f"Session Cookie: {session_id[:20]}..." if len(session_id) > 20 else session_id)
-    logger.info(f"Session Data: {dict(request.session)}")
-    logger.info(f"User in session: {user is not None}")
-    logger.info(f"==================")
-    
-    if user:
-        return {
-            'authenticated': True,
-            'user': {
-                'email': user.get('email'),
-                'name': user.get('name')
-            }
-        }
-    
-    return {
-        'authenticated': False,
-        'user': None
-    }
-
-
 
 # roles = user.get("roles", [])
 # if any(r in roles for r in allowed_groups):
