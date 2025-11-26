@@ -8,7 +8,7 @@ import logging
 import os
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.proxy_headers import ProxyHeadersMiddleware
+# from starlette.middleware.proxy_headers import ProxyHeadersMiddleware
 
 # Logging
 logging.basicConfig(
@@ -28,7 +28,7 @@ app = FastAPI(
 # ----------------------------------------------------------------------
 # 1️⃣ CORS FIRST (must be before session middleware)
 # ----------------------------------------------------------------------
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+# app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 app.add_middleware(
     CORSMiddleware,
