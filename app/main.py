@@ -55,11 +55,11 @@ session_kwargs = dict(
 )
 
 # Optional: include domain if your Starlette supports it
-try:
-    app.add_middleware(SessionMiddleware, **session_kwargs, domain=FRONTEND_ORIGIN.replace('https://',''))
-except TypeError:
-    # fallback: starlette doesn't support domain param — add without domain
-    app.add_middleware(SessionMiddleware, **session_kwargs)
+# try:
+#     app.add_middleware(SessionMiddleware, **session_kwargs, domain=FRONTEND_ORIGIN.replace('https://',''))
+# except TypeError:
+#     # fallback: starlette doesn't support domain param — add without domain
+#     app.add_middleware(SessionMiddleware, **session_kwargs)
 
 # ----------------------------------------------------------------------
 # OAuth config
@@ -81,15 +81,12 @@ app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 # ----------------------------------------------------------------------
 # React static files — serve static folder and SPA index for non /api paths
 # ----------------------------------------------------------------------
+from fastapi.staticfiles import StaticFiles
 app.mount("/static", StaticFiles(directory="frontend/build/static"), name="static")
 
-# Serve index.html for frontend routes but do NOT intercept /api/*
-@app.get("/{full_path:path}")
-async def spa(full_path: str, request: Request):
-    # do not capture api routes
-    if full_path.startswith('api') or full_path.startswith('api/'):
-        # Let the router handle it -> return 404 so FastAPI will route to API
-        return FileResponse(os.path.join("frontend", "build", "index.html"))
+# --- React SPA fallback ---
+@app.get("/{path_name:path}")
+async def spa_fallback(path_name: str):
     return FileResponse(os.path.join("frontend", "build", "index.html"))
 
 # Startup logs
