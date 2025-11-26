@@ -1,52 +1,11 @@
-from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse
-from typing import Dict, Optional
+from typing import Dict
 import logging
-from authlib.integrations.base_client.errors import MismatchingStateError, OAuthError
 from app.config import settings
-
-# Import these if you have them
-try:
-    from app.bluegroups_auth import is_user_in_group
-except ImportError:
-    def is_user_in_group(email: str, group: str) -> bool:
-        return True
-
-try:
-    from app.auth.dependencies import get_current_active_user, get_current_user
-    from app.auth.permissions import get_user_roles
-except ImportError:
-    async def get_current_user(request: Request) -> Dict:
-        user = request.session.get('user')
-        if not user:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        return user
-    
-    async def get_current_active_user(request: Request) -> Dict:
-        return await get_current_user(request)
-    
-    async def get_user_roles(request: Request) -> Dict:
-        user = request.session.get('user')
-        return {"roles": user.get('roles', []) if user else []}
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-def clear_oauth_state(session) -> None:
-    """Clear ALL OAuth-related state from session"""
-    keys_to_remove = []
-    for key in list(session.keys()):
-        # Clear state keys (authlib uses _state_ prefix)
-        if key.startswith('_') or 'state' in key.lower():
-            keys_to_remove.append(key)
-    
-    for key in keys_to_remove:
-        try:
-            del session[key]
-            logger.debug(f"Cleared session key: {key}")
-        except KeyError:
-            pass
 
 
 def clear_all_session(session) -> None:
@@ -62,15 +21,13 @@ def clear_all_session(session) -> None:
 
 @router.get("/login")
 async def login(request: Request):
-    '''Start the OAuth/OIDC authorization code flow'''
+    """Start the OAuth/OIDC authorization code flow"""
     try:
-        # CRITICAL: Clear ENTIRE session before new login attempt
-        # This prevents state mismatch on subsequent logins
+        # Clear session before new login
         clear_all_session(request.session)
         
         redirect_uri = str(request.url_for('auth_callback'))
         logger.info(f"Starting login flow with redirect_uri: {redirect_uri}")
-        logger.debug(f"Session keys after clearing: {list(request.session.keys())}")
 
         from app.main import oauth
         return await oauth.appid.authorize_redirect(request, redirect_uri)
@@ -81,51 +38,41 @@ async def login(request: Request):
 
 @router.get("/auth/callback")
 async def auth_callback(request: Request):
-    '''OAuth callback endpoint - Exchanges authorization code for tokens'''
+    """OAuth callback endpoint - Exchanges authorization code for tokens"""
     try:
         logger.info("Processing auth callback")
         logger.debug(f"Request URL: {request.url}")
         logger.debug(f"Session keys: {list(request.session.keys())}")
+        logger.debug(f"Cookies: {dict(request.cookies)}")
         
         from app.main import oauth
         
-        # Check if we have the required state in session
-        state_in_url = request.query_params.get('state')
-        expected_state_key = f'_state_appid_{state_in_url}'
+        # Don't do manual state checking - let authlib handle it
+        # If state mismatch, we'll catch the exception and retry
         
-        if expected_state_key not in request.session:
-            logger.warning(f"State key not found in session. Available keys: {list(request.session.keys())}")
-            logger.warning("Redirecting to login for fresh start")
-            clear_all_session(request.session)
-            return RedirectResponse(url="/api/v1/login", status_code=302)
-        
-        # Try to exchange authorization code for tokens
         try:
             token = await oauth.appid.authorize_access_token(request)
-        except MismatchingStateError as e:
-            logger.warning(f"State mismatch detected: {e}")
-            clear_all_session(request.session)
-            return RedirectResponse(url="/api/v1/login", status_code=302)
-        except OAuthError as e:
-            logger.error(f"OAuth error during token exchange: {e}")
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "mismatching_state" in error_msg or "state" in error_msg:
+                logger.warning(f"State mismatch detected: {e}")
+                # Clear session and redirect to frontend login page (not /api/v1/login to avoid loop)
+                clear_all_session(request.session)
+                return RedirectResponse(
+                    url=f"{settings.FRONTEND_URL}/login?error=session_expired",
+                    status_code=302
+                )
+            logger.error(f"Token exchange error: {e}", exc_info=True)
             clear_all_session(request.session)
             return RedirectResponse(
-                url=f"{settings.FRONTEND_URL}/login?error=oauth_error",
+                url=f"{settings.FRONTEND_URL}/login?error=auth_failed",
                 status_code=302
             )
-        except Exception as e:
-            if "mismatching_state" in str(e).lower():
-                logger.warning(f"State mismatch in exception: {e}")
-                clear_all_session(request.session)
-                return RedirectResponse(url="/api/v1/login", status_code=302)
-            raise
         
         logger.info("Token exchange successful")
         
-        # Get user info from ID token or userinfo endpoint
+        # Get user info
         user = None
-        roles = []
-        
         try:
             user = await oauth.appid.parse_id_token(request, token)
             logger.info("ID token parsed successfully")
@@ -149,21 +96,20 @@ async def auth_callback(request: Request):
                 status_code=302
             )
         
-        # Get user roles from BlueGroups (with error handling)
         email = user.get("email")
-        # if email:
-        #     try:
-        #         if is_user_in_group(email, "Solution_Architect"):
-        #             roles.append("Solution_Architect")
-        #         # if is_user_in_group(email, "Administration"):
-        #         roles.append("Administration")
-        #     except Exception as e:
-        #         logger.warning(f"Failed to check BlueGroups: {e}")
         
-        # Clear OAuth state keys but keep session active
-        clear_oauth_state(request.session)
-
-        roles = ["admin"]
+        # ============================================================
+        # GIVE ALL USERS ADMIN ACCESS - All roles enabled
+        # ============================================================
+        roles = ["admin", "Solution_Architect", "Administration", "user"]
+        
+        # Clear OAuth state keys
+        keys_to_remove = [k for k in list(request.session.keys()) if k.startswith('_')]
+        for key in keys_to_remove:
+            try:
+                del request.session[key]
+            except KeyError:
+                pass
         
         # Store user info in session
         request.session['user'] = {
@@ -173,7 +119,8 @@ async def auth_callback(request: Request):
             'given_name': user.get('given_name'),
             'family_name': user.get('family_name'),
             'identities': user.get('identities'),
-            'roles': roles,
+            'roles': roles,  # All users get all roles
+            'is_admin': True,  # All users are admin
         }
         
         # Store token for API calls
@@ -185,7 +132,6 @@ async def auth_callback(request: Request):
         
         logger.info(f"✅ User logged in: {email}")
         logger.info(f"✅ Roles: {roles}")
-        logger.debug(f"Session keys after login: {list(request.session.keys())}")
         
         # Redirect to catalog page
         redirect_url = f"{settings.FRONTEND_URL}/catalog"
@@ -193,10 +139,6 @@ async def auth_callback(request: Request):
         
         return RedirectResponse(url=redirect_url, status_code=302)
         
-    except MismatchingStateError:
-        logger.warning("State mismatch caught at outer level")
-        clear_all_session(request.session)
-        return RedirectResponse(url="/api/v1/login", status_code=302)
     except Exception as e:
         logger.error(f"Auth callback error: {e}", exc_info=True)
         clear_all_session(request.session)
@@ -223,7 +165,8 @@ async def get_user_profile(request: Request):
             'email': user.get('email'),
             'given_name': user.get('given_name'),
             'family_name': user.get('family_name'),
-            'roles': user.get('roles', [])
+            'roles': user.get('roles', []),
+            'is_admin': user.get('is_admin', True),  # Default to True
         }
     }
 
@@ -235,16 +178,19 @@ async def get_current_user_info(request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
+    # Ensure user always has admin roles
+    roles = user.get('roles', ["admin", "Solution_Architect", "Administration", "user"])
+    
     return {
-        "user": user,
-        "roles": {"roles": user.get('roles', [])}
+        "user": {**user, "is_admin": True},
+        "roles": {"roles": roles}
     }
 
 
 @router.post("/logout")
 @router.get("/logout")
 async def logout(request: Request):
-    """Logout user by invalidating session and clearing cookies"""
+    """Logout user"""
     W3_SLO_URL = getattr(settings, 'W3_SLO_URL', "https://preprod.login.w3.ibm.com/idaas/mtfim/sps/idaas/logout")
     
     try:
@@ -257,12 +203,10 @@ async def logout(request: Request):
             }
         )
         
-        # Delete session cookie
         response.delete_cookie(
             key="session",
             path="/",
-            domain=None,
-            samesite="none",
+            samesite="lax",
             secure=True,
         )
         
@@ -289,7 +233,8 @@ async def validate_session(request: Request):
         'user': {
             'email': user.get('email'),
             'name': user.get('name'),
-            'roles': user.get('roles', [])
+            'roles': user.get('roles', ["admin"]),
+            'is_admin': True
         }
     }
 
@@ -299,16 +244,14 @@ async def check_auth(request: Request):
     """Check authentication status without requiring login"""
     user = request.session.get('user')
     
-    logger.debug(f"Auth check - Session keys: {list(request.session.keys())}")
-    logger.debug(f"Auth check - User present: {user is not None}")
-    
     if user:
         return {
             'authenticated': True,
             'user': {
                 'email': user.get('email'),
                 'name': user.get('name'),
-                'roles': user.get('roles', [])
+                'roles': user.get('roles', ["admin", "Solution_Architect", "Administration", "user"]),
+                'is_admin': True
             }
         }
     
@@ -320,11 +263,12 @@ async def check_auth(request: Request):
 
 @router.get("/debug/session")
 async def debug_session(request: Request):
-    """Debug endpoint to check session state - REMOVE IN PRODUCTION"""
+    """Debug endpoint to check session state"""
     return {
         "session_keys": list(request.session.keys()),
         "has_user": "user" in request.session,
         "has_token": "token" in request.session,
         "cookie_present": "session" in request.cookies,
         "cookies": dict(request.cookies),
+        "user": request.session.get('user'),
     }
