@@ -45,52 +45,46 @@ async def auth_callback(request: Request):
 
         from app.main import oauth
 
-        token = await oauth.appid.authorize_access_token(request)
-        logger.info("[CALLBACK] Token OK")
-
-        # Fetch user
-        try:
-            userinfo = await oauth.appid.parse_id_token(request, token)
-        except:
-            logger.warning("[CALLBACK] ID token parse failed → using userinfo()")
-            userinfo = await oauth.appid.userinfo(token=token)
-
-        email = userinfo.get("email")
-        name = userinfo.get("name") or f"{userinfo.get('given_name','')} {userinfo.get('family_name','')}".strip()
-
-        # ===================================================
-        # REMOVE AppID internal state keys (MUST DO)
-        # ===================================================
+        # MUST: clear AppID oauth state BEFORE token exchange
+        # because Authlib writes new state into session immediately
         for key in list(request.session.keys()):
             if key.startswith("_state_appid"):
                 del request.session[key]
 
-        # ===================================================
-        # FORCE USER AS ADMIN
-        # ===================================================
-        roles = ["admin"]
+        token = await oauth.appid.authorize_access_token(request)
+        logger.info("[CALLBACK] Token OK")
 
-        # ===================================================
-        # SAVE SESSION (100% stable format)
-        # ===================================================
+        # ID Token → User Info
+        try:
+            user = await oauth.appid.parse_id_token(request, token)
+        except:
+            logger.warning("[CALLBACK] ID token parse failed → using userinfo()")
+            user = await oauth.appid.userinfo(token=token)
+
+        email = user.get("email")
+        name = (
+            user.get("name")
+            or f"{user.get('given_name', '')} {user.get('family_name', '')}".strip()
+        )
+
+        # Save user in session
         request.session["user"] = {
-            "sub": userinfo.get("sub"),
-            "email": email,
+            "sub": user.get("sub"),
             "name": name,
-            "given_name": userinfo.get("given_name"),
-            "family_name": userinfo.get("family_name"),
-            "identities": userinfo.get("identities"),
-            "roles": roles,
+            "email": email,
+            "given_name": user.get("given_name"),
+            "family_name": user.get("family_name"),
+            "roles": ["admin"],
         }
 
         request.session["token"] = {
             "access_token": token.get("access_token"),
-            "token_type": token.get("token_type"),
-            "expires_at": token.get("expires_at"),
             "id_token": token.get("id_token"),
+            "expires_at": token.get("expires_at"),
         }
 
-        request.session.update(request.session)  # FORCE SAVE
+        # MUST: force save
+        request.session.modified = True
 
         logger.info(f"[CALLBACK] Session saved for {email}")
         logger.info(f"[CALLBACK] Redirect -> {settings.FRONTEND_URL}/catalog")
@@ -100,6 +94,7 @@ async def auth_callback(request: Request):
     except Exception as e:
         logger.error(f"[CALLBACK ERROR] {e}", exc_info=True)
         return RedirectResponse(f"{settings.FRONTEND_URL}/login?error=auth_failed")
+
 
 
 # ==========================================================
