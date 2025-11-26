@@ -25,28 +25,28 @@ app = FastAPI(
 )
 
 # ----------------------------------------------------------------------
-# CORS
+# MIDDLEWARE ORDER MATTERS! Session must be added BEFORE CORS
 # ----------------------------------------------------------------------
-FRONTEND_ORIGIN = settings.FRONTEND_URL.rstrip('/')
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ----------------------------------------------------------------------
-# SESSION - THIS WAS MISSING!
-# ----------------------------------------------------------------------
+# 1. SESSION MIDDLEWARE FIRST
 app.add_middleware(
     SessionMiddleware,
     secret_key=settings.SESSION_SECRET,
     session_cookie="session",
-    same_site="none",
+    same_site="lax",  # Changed from "none" to "lax" for better compatibility
     max_age=86400,
     https_only=True,
+)
+
+# 2. CORS MIDDLEWARE SECOND
+FRONTEND_ORIGIN = settings.FRONTEND_URL.rstrip('/')
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[FRONTEND_ORIGIN, "https://solution-offering-app.onrender.com"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ----------------------------------------------------------------------
@@ -71,18 +71,15 @@ app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 # ----------------------------------------------------------------------
 app.mount("/static", StaticFiles(directory="frontend/build/static"), name="static")
 
-# --- React SPA fallback ---
 @app.get("/{path_name:path}")
 async def spa_fallback(path_name: str):
     return FileResponse(os.path.join("frontend", "build", "index.html"))
 
-# Startup logs
 @app.on_event("startup")
 async def startup_event():
     logger.info("=" * 70)
     logger.info(f"{settings.PROJECT_NAME} - Starting")
     logger.info(f"Frontend URL: {FRONTEND_ORIGIN}")
-    logger.info(f"CORS Allowed Origins: {[FRONTEND_ORIGIN]}")
     logger.info("=" * 70)
 
 @app.get("/")
@@ -92,7 +89,3 @@ async def index():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
-
-@app.get("/debug")
-async def debug(request: Request):
-    return {"cookies": dict(request.cookies), "session": dict(request.session)}
