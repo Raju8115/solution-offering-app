@@ -47,7 +47,9 @@ app.add_middleware(
     secret_key=settings.SESSION_SECRET,
     session_cookie="session",
     same_site="none",
+    https_only=True,     # enables Secure
     max_age=86400,
+    domain="solution-offering-app.onrender.com",
 )
 
 # ----------------------------------------------------------------------
