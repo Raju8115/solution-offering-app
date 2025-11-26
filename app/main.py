@@ -8,7 +8,6 @@ import logging
 import os
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-# from starlette.middleware.proxy_headers import ProxyHeadersMiddleware
 
 # Logging
 logging.basicConfig(
@@ -26,34 +25,44 @@ app = FastAPI(
 )
 
 # ----------------------------------------------------------------------
-# 1️⃣ CORS FIRST (must be before session middleware)
+# CORS
 # ----------------------------------------------------------------------
-# app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+FRONTEND_ORIGIN = settings.FRONTEND_URL.rstrip('/')  # e.g. https://solution-offering-app.onrender.com
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://solution-offering-app.onrender.com",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=[FRONTEND_ORIGIN],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.add_middleware(
-    SessionMiddleware,
+# ----------------------------------------------------------------------
+# SESSION
+# ----------------------------------------------------------------------
+# IMPORTANT:
+# - starlette.session.SessionMiddleware arguments vary by version.
+# - https_only=True instructs Starlette to set Secure on the cookie.
+# - If your Starlette version supports `domain=` you can add it here. If not,
+#   upgrade starlette to >=0.27.0 or set the cookie manually on the redirect.
+
+session_kwargs = dict(
     secret_key=settings.SESSION_SECRET,
     session_cookie="session",
     same_site="none",
-    https_only=True,     # enables Secure
     max_age=86400,
-    domain="solution-offering-app.onrender.com",
+    https_only=True,
 )
 
+# Optional: include domain if your Starlette supports it
+try:
+    app.add_middleware(SessionMiddleware, **session_kwargs, domain=FRONTEND_ORIGIN.replace('https://',''))
+except TypeError:
+    # fallback: starlette doesn't support domain param — add without domain
+    app.add_middleware(SessionMiddleware, **session_kwargs)
+
 # ----------------------------------------------------------------------
-# 3️⃣ OAuth config
+# OAuth config
 # ----------------------------------------------------------------------
 oauth = OAuth()
 oauth.register(
@@ -65,41 +74,36 @@ oauth.register(
 )
 
 # ----------------------------------------------------------------------
-# 4️⃣ API Router
+# API Router
 # ----------------------------------------------------------------------
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
 # ----------------------------------------------------------------------
-# 5️⃣ React static files
+# React static files — serve static folder and SPA index for non /api paths
 # ----------------------------------------------------------------------
 app.mount("/static", StaticFiles(directory="frontend/build/static"), name="static")
 
+# Serve index.html for frontend routes but do NOT intercept /api/*
 @app.get("/{full_path:path}")
-async def spa(full_path: str):
+async def spa(full_path: str, request: Request):
+    # do not capture api routes
+    if full_path.startswith('api') or full_path.startswith('api/'):
+        # Let the router handle it -> return 404 so FastAPI will route to API
+        return FileResponse(os.path.join("frontend", "build", "index.html"))
     return FileResponse(os.path.join("frontend", "build", "index.html"))
 
-# ----------------------------------------------------------------------
-# Startup
-# ----------------------------------------------------------------------
+# Startup logs
 @app.on_event("startup")
 async def startup_event():
     logger.info("=" * 70)
-    logger.info("Solution Offering App - Starting")
-    logger.info(f"Frontend URL: {settings.FRONTEND_URL}")
-
-    ALLOWED_ORIGINS = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://solution-offering-app.onrender.com",
-    ]
-
-    logger.info(f"CORS Allowed Origins: {ALLOWED_ORIGINS}")
+    logger.info(f"{settings.PROJECT_NAME} - Starting")
+    logger.info(f"Frontend URL: {FRONTEND_ORIGIN}")
+    logger.info(f"CORS Allowed Origins: {[FRONTEND_ORIGIN]}")
     logger.info("=" * 70)
-
 
 @app.get("/")
 async def index():
-    return {"message": "Solution Offering API running"}
+    return {"message": f"{settings.PROJECT_NAME} running"}
 
 @app.get("/health")
 async def health():
@@ -107,4 +111,6 @@ async def health():
 
 @app.get("/debug")
 async def debug(request: Request):
-    return {"cookies": request.cookies, "session": dict(request.session)}
+    # Useful immediately after login to inspect cookies + session
+    return {"cookies": dict(request.cookies), "session": dict(request.session)}
+
