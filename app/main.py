@@ -27,7 +27,7 @@ app = FastAPI(
 # ----------------------------------------------------------------------
 # CORS
 # ----------------------------------------------------------------------
-FRONTEND_ORIGIN = settings.FRONTEND_URL.rstrip('/')  # e.g. https://solution-offering-app.onrender.com
+FRONTEND_ORIGIN = settings.FRONTEND_URL.rstrip('/')
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,28 +38,16 @@ app.add_middleware(
 )
 
 # ----------------------------------------------------------------------
-# SESSION
+# SESSION - THIS WAS MISSING!
 # ----------------------------------------------------------------------
-# IMPORTANT:
-# - starlette.session.SessionMiddleware arguments vary by version.
-# - https_only=True instructs Starlette to set Secure on the cookie.
-# - If your Starlette version supports `domain=` you can add it here. If not,
-#   upgrade starlette to >=0.27.0 or set the cookie manually on the redirect.
-
-session_kwargs = dict(
+app.add_middleware(
+    SessionMiddleware,
     secret_key=settings.SESSION_SECRET,
     session_cookie="session",
     same_site="none",
     max_age=86400,
     https_only=True,
 )
-
-# Optional: include domain if your Starlette supports it
-# try:
-#     app.add_middleware(SessionMiddleware, **session_kwargs, domain=FRONTEND_ORIGIN.replace('https://',''))
-# except TypeError:
-#     # fallback: starlette doesn't support domain param — add without domain
-#     app.add_middleware(SessionMiddleware, **session_kwargs)
 
 # ----------------------------------------------------------------------
 # OAuth config
@@ -79,9 +67,8 @@ oauth.register(
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
 # ----------------------------------------------------------------------
-# React static files — serve static folder and SPA index for non /api paths
+# React static files
 # ----------------------------------------------------------------------
-from fastapi.staticfiles import StaticFiles
 app.mount("/static", StaticFiles(directory="frontend/build/static"), name="static")
 
 # --- React SPA fallback ---
@@ -108,6 +95,4 @@ async def health():
 
 @app.get("/debug")
 async def debug(request: Request):
-    # Useful immediately after login to inspect cookies + session
     return {"cookies": dict(request.cookies), "session": dict(request.session)}
-
